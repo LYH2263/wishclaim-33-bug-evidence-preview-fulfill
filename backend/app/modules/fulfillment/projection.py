@@ -8,10 +8,11 @@
 import json
 
 from app.modules.fulfillment.channels import channel_label
+from app.modules.fulfillment.freeze import is_frozen_snapshot
 
 
 def parse_evidence(raw) -> dict | None:
-    """从行数据取出已冻结的举证快照；未核销或脏数据一律 None。"""
+    """从行数据取出已冻结的举证快照；未核销、空壳、缺渠道/凭证的脏数据一律 None。"""
     if raw is None:
         return None
     if isinstance(raw, dict):
@@ -21,9 +22,7 @@ def parse_evidence(raw) -> dict | None:
             ev = json.loads(raw)
         except (TypeError, ValueError):
             return None
-    if not isinstance(ev, dict):
-        return None
-    return ev
+    return ev if is_frozen_snapshot(ev) else None
 
 
 def _label(ev: dict) -> str:

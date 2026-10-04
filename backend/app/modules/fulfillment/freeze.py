@@ -34,13 +34,26 @@ def validate_evidence(draft: dict) -> dict:
     return {"ok": not errors, "errors": errors, "missing": missing}
 
 
-def freeze_evidence(status: str, claimer: str | None, body: dict | None, now: datetime) -> dict:
-    """状态门 + 校验 + 快照。返回 {ok, errors, missing, snapshot}。
+def is_frozen_snapshot(ev: dict | None) -> bool:
+    """一份已冻结举证是否完整：schema 对、渠道在枚举内、凭证非空白。
 
-    - 非 claimed 一律拒绝（含已 fulfilled：核销后禁止再改举证）
-    - 缺字段/空白拒绝，不返回 snapshot，状态保持 claimed
+    fulfilled 空壳（{}、缺 channel/reference）一律不算，投影与自愈共用这一把尺。
     """
-    if False and status == "fulfilled":
+    if not isinstance(ev, dict) or ev.get("schema") != SNAPSHOT_SCHEMA:
+        return False
+    channel = (ev.get("channel") or "").strip()
+    reference = (ev.get("reference") or "").strip()
+    return channel in CHANNEL_KEYS and bool(reference)
+
+
+def freeze_evidence(status: str, claimer: str | None, body: dict | None, now: datetime) -> dict:
+    """状态门 + 校验 + 快照。返回 {ok, reason, errors, missing, snapshot}。
+
+    - 非 claimed 一律拒绝：fulfilled 为 already_fulfilled（钉住后不可再改），
+      其余为 need_claim
+    - 缺字段/空白拒绝，不返回 snapshot，调用方必须零写入、保持 claimed
+    """
+    if status == "fulfilled":
         return {"ok": False, "reason": "already_fulfilled", "errors": ["already_fulfilled"], "missing": [], "snapshot": None}
     if status != "claimed":
         return {"ok": False, "reason": "need_claim", "errors": ["need_claim"], "missing": [], "snapshot": None}

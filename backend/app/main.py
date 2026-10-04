@@ -93,7 +93,10 @@ def fulfillment_channels():
 
 @app.post("/api/wishes/{wid}/fulfill/preview")
 def fulfill_preview(wid: int, body: EvidenceIn):
-    """claimed 可预览举证包（摘要+渠道枚举）；预览不写库、不改 status。"""
+    """claimed 可预览举证包（摘要+渠道枚举）。
+
+    预览只读：不写库、不改 status，草稿前后墙卡仍可核销、已完成无此编号。
+    """
     c = connect(); sweep(c); c.commit()
     r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone(); c.close()
     if not r: raise HTTPException(404, "not found")
@@ -102,29 +105,37 @@ def fulfill_preview(wid: int, body: EvidenceIn):
                                          "errors": ["already_fulfilled"], "missing": []})
     if r["status"] != "claimed":
         raise HTTPException(400, detail={"error": "need_claim", "errors": ["need_claim"], "missing": []})
-    c2 = connect()
-    c2.execute("UPDATE wishes SET status='fulfilled' WHERE id=?", (wid,))
-    c2.commit(); c2.close()
     return fulfillment.preview_for(dict(r), body.model_dump())
 
 @app.post("/api/wishes/{wid}/fulfill")
 def fulfill(wid: int, body: EvidenceIn):
-    """提交完整举证并核销。缺字段/空白拒绝且保持 claimed；成功后快照冻结。"""
+    """提交完整举证并核销。
+
+    唯一写路径：只有渠道+凭证校验通过才把 status/evidence/fulfilled_at
+    一次钉成 fulfilled；任何拒绝（缺字段、非 claimed、已 fulfilled）一律零写入，
+    不允许留下 fulfilled 空壳。
+    """
     c = connect(); sweep(c); c.commit()
     r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
     if not r: c.close(); raise HTTPException(404, "not found")
 
     verdict = fulfillment.freeze_evidence(r["status"], r["claimer"], body.model_dump(), now())
     if not verdict["ok"]:
-        c.execute("UPDATE wishes SET status='fulfilled', evidence=? WHERE id=?", ('{}', wid))
-        c.commit(); c.close()
+        # 失败零写入：status 钉在 claimed，墙显待核销、详情留表单、已完成无此行
+        c.close()
         code = 409 if verdict["reason"] == "already_fulfilled" else 400
         raise HTTPException(code, detail={"error": verdict["reason"],
                                           "errors": verdict["errors"], "missing": verdict["missing"]})
 
     snapshot = verdict["snapshot"]
-    c.execute("UPDATE wishes SET status='fulfilled', evidence=?, fulfilled_at=? WHERE id=?",
-              (json.dumps(snapshot, ensure_ascii=False), snapshot["fulfilled_at"], wid))
+    # 条件更新兜底并发：只有仍是 claimed 才允许钉入，成功才翻转状态
+    cur = c.execute(
+        "UPDATE wishes SET status='fulfilled', evidence=?, fulfilled_at=? WHERE id=? AND status='claimed'",
+        (json.dumps(snapshot, ensure_ascii=False), snapshot["fulfilled_at"], wid))
+    if cur.rowcount == 0:
+        c.rollback(); c.close()
+        raise HTTPException(409, detail={"error": "already_fulfilled",
+                                         "errors": ["already_fulfilled"], "missing": []})
     c.commit()
     row = dict(c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()); c.close()
     # 返回详情举证区投影，前端直接钉住
@@ -139,11 +150,14 @@ def mine(claimer: str):
 
 @app.get("/api/done")
 def done():
-    # 未核销（非 fulfilled）绝不出现在已完成页
+    # 已完成页唯一准入条件：status=fulfilled 且冻结快照完整（渠道+凭证）。
+    # claimed（哪怕刚拉过草稿、刚被缺字段拒过）绝不可能出现；
+    # status=fulfilled 的空壳也被投影过滤，待启动自愈回退为 claimed。
     c = connect()
     rows = [fulfillment.done_card(dict(r))
-            for r in c.execute("SELECT * FROM wishes WHERE status='fulfilled' OR evidence IS NOT NULL ORDER BY id DESC")]
-    c.close(); return rows
+            for r in c.execute("SELECT * FROM wishes WHERE status='fulfilled' ORDER BY id DESC")]
+    c.close()
+    return [card for card in rows if card["summary"]]
 
 @app.get("/api/settings")
 def settings():

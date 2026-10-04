@@ -1,4 +1,32 @@
 from app.db import connect
+from app.modules.fulfillment.freeze import is_frozen_snapshot
+import json
+
+
+def heal_fulfilled_shells(c):
+    """回退旧版本留下的 fulfilled 空壳（evidence 缺渠道/凭证）。
+
+    claimed 且未成功提交的编号不得停在 fulfilled、不得进已完成：
+    保留原认领人就回 claimed（TTL 由 sweep 兜底），否则退回 open。
+    """
+    for r in c.execute("SELECT * FROM wishes WHERE status='fulfilled'").fetchall():
+        raw = r["evidence"]
+        try:
+            ev = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            ev = None
+        if is_frozen_snapshot(ev):
+            continue
+        if r["claimer"]:
+            c.execute(
+                "UPDATE wishes SET status='claimed', evidence=NULL, fulfilled_at=NULL WHERE id=?",
+                (r["id"],))
+        else:
+            c.execute(
+                "UPDATE wishes SET status='open', claimer=NULL, claimed_at=NULL, expires_at=NULL,"
+                " evidence=NULL, fulfilled_at=NULL WHERE id=?",
+                (r["id"],))
+
 
 def init_db():
     c = connect()
@@ -16,6 +44,9 @@ def init_db():
         c.execute("ALTER TABLE wishes ADD COLUMN evidence TEXT")
     if "fulfilled_at" not in cols:
         c.execute("ALTER TABLE wishes ADD COLUMN fulfilled_at TEXT")
+    # 自愈：旧版本可能把草稿/缺字段提交写成 fulfilled 空壳，启动时全部回退
+    heal_fulfilled_shells(c)
+    c.commit()
     if c.execute("SELECT COUNT(*) c FROM wishes").fetchone()["c"] == 0:
         import json
         _fulfilled_at = "2026-09-30T10:00:00+00:00"

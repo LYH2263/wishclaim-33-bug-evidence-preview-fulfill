@@ -105,8 +105,19 @@ async function fulfill() {
     await api('/wishes/' + props.id + '/fulfill', { method: 'POST', body: JSON.stringify(form.value) })
     await load()
   } catch (e) {
-    err.value = e.message
-    // 被拒后保持 claimed，刷新一次预览以提示缺失项
+    // 被拒后后端零写入、status 仍 claimed：不 reload，表单与墙卡都保持认领中
+    const d = e.payload?.detail
+    if (d?.error === 'incomplete_evidence') {
+      const names = (d.missing || []).map(missingLabel)
+      err.value = names.length
+        ? '提交失败，还缺：' + names.join('、')
+        : '提交失败：举证不完整'
+    } else if (d?.error === 'already_fulfilled') {
+      err.value = '已核销并冻结，渠道与凭证不可再改'
+    } else {
+      err.value = e.message
+    }
+    // 刷新只读预览以提示缺失项（预览不写库、不改 status）
     await preview()
   }
 }
