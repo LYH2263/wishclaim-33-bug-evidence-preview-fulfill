@@ -6,7 +6,10 @@ export async function api(path, opts = {}) {
   if (!r.ok) {
     let detail = r.statusText
     try { const j = await r.json(); detail = j.detail || JSON.stringify(j) } catch {}
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    err.status = r.status
+    err.detail = typeof detail === 'object' && detail !== null ? detail : null
+    throw err
   }
   if (r.status === 204) return null
   return r.json()

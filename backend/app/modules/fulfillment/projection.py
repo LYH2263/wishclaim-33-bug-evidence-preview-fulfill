@@ -53,9 +53,15 @@ def evidence_view(ev: dict | None) -> dict | None:
     }
 
 
-def done_card(row: dict) -> dict:
-    """已完成列表投影：只暴露摘要，不暴露完整举证以外的字段。"""
+def done_card(row: dict) -> dict | None:
+    """已完成列表投影：只暴露摘要。
+
+    status=fulfilled 但没有完整冻结快照的脏行返回 None，
+    由路由层丢弃——已完成列表禁止渠道空/凭证空的行。
+    """
     ev = parse_evidence(row.get("evidence"))
+    if not ev or not (ev.get("channel") and str(ev.get("reference") or "").strip()):
+        return None
     return {
         "id": row["id"],
         "title": row.get("title"),

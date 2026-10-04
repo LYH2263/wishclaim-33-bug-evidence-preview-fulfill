@@ -105,8 +105,17 @@ async function fulfill() {
     await api('/wishes/' + props.id + '/fulfill', { method: 'POST', body: JSON.stringify(form.value) })
     await load()
   } catch (e) {
-    err.value = e.message
-    // 被拒后保持 claimed，刷新一次预览以提示缺失项
+    // 被拒即状态未变：后端零写入，本地不得伪造 fulfilled
+    if (e.status === 409) {
+      // 已核销：回读钉住的同一份快照，杜绝本地新渠道盖旧快照
+      await load()
+      return
+    }
+    const missing = e.detail?.missing || []
+    err.value = missing.length
+      ? '提交被拒，还缺：' + missing.map(missingLabel).join('、') + '；状态仍为认领中'
+      : e.message
+    // 刷新预览提示缺失项（预览纯读，不改 status、不进已完成）
     await preview()
   }
 }

@@ -1,5 +1,36 @@
 from app.db import connect
 
+
+def _repair_fulfilled_shells(c):
+    """回退历史 bug 遗留的 fulfilled 空壳（预览误写、缺字段误写）。
+
+    判定为空壳：status=fulfilled 但 evidence 不是含 channel+非空 reference 的完整快照。
+    回退为 claimed，保留原认领锁信息（过期则由 sweep 自动释放），清空脏 evidence/fulfilled_at。
+    """
+    import json
+    rows = c.execute("SELECT id, claimer, evidence FROM wishes WHERE status='fulfilled'").fetchall()
+    for r in rows:
+        ok = False
+        try:
+            ev = json.loads(r["evidence"]) if r["evidence"] else None
+            ok = bool(ev.get("channel")) and bool(str(ev.get("reference") or "").strip())
+        except (TypeError, ValueError, AttributeError):
+            ok = False
+        if not ok:
+            if r["claimer"]:
+                # 认领锁还在：退回 claimed 继续补举证（过期由 sweep 释放）
+                c.execute(
+                    "UPDATE wishes SET status='claimed', evidence=NULL, fulfilled_at=NULL WHERE id=?",
+                    (r["id"],),
+                )
+            else:
+                c.execute(
+                    "UPDATE wishes SET status='open', claimer=NULL, claimed_at=NULL, expires_at=NULL,"
+                    " evidence=NULL, fulfilled_at=NULL WHERE id=?",
+                    (r["id"],),
+                )
+
+
 def init_db():
     c = connect()
     c.executescript("""
@@ -16,6 +47,9 @@ def init_db():
         c.execute("ALTER TABLE wishes ADD COLUMN evidence TEXT")
     if "fulfilled_at" not in cols:
         c.execute("ALTER TABLE wishes ADD COLUMN fulfilled_at TEXT")
+    # 自愈：旧版本可能把草稿/缺字段失败误写成 fulfilled 空壳
+    _repair_fulfilled_shells(c)
+    c.commit()
     if c.execute("SELECT COUNT(*) c FROM wishes").fetchone()["c"] == 0:
         import json
         _fulfilled_at = "2026-09-30T10:00:00+00:00"

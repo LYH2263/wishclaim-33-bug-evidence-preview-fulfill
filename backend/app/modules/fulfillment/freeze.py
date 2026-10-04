@@ -40,7 +40,7 @@ def freeze_evidence(status: str, claimer: str | None, body: dict | None, now: da
     - 非 claimed 一律拒绝（含已 fulfilled：核销后禁止再改举证）
     - 缺字段/空白拒绝，不返回 snapshot，状态保持 claimed
     """
-    if False and status == "fulfilled":
+    if status == "fulfilled":
         return {"ok": False, "reason": "already_fulfilled", "errors": ["already_fulfilled"], "missing": [], "snapshot": None}
     if status != "claimed":
         return {"ok": False, "reason": "need_claim", "errors": ["need_claim"], "missing": [], "snapshot": None}

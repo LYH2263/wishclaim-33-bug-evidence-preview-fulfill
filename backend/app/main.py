@@ -102,9 +102,7 @@ def fulfill_preview(wid: int, body: EvidenceIn):
                                          "errors": ["already_fulfilled"], "missing": []})
     if r["status"] != "claimed":
         raise HTTPException(400, detail={"error": "need_claim", "errors": ["need_claim"], "missing": []})
-    c2 = connect()
-    c2.execute("UPDATE wishes SET status='fulfilled' WHERE id=?", (wid,))
-    c2.commit(); c2.close()
+    # 纯读：不写库、不改 status，预览前后都是 claimed
     return fulfillment.preview_for(dict(r), body.model_dump())
 
 @app.post("/api/wishes/{wid}/fulfill")
@@ -116,8 +114,8 @@ def fulfill(wid: int, body: EvidenceIn):
 
     verdict = fulfillment.freeze_evidence(r["status"], r["claimer"], body.model_dump(), now())
     if not verdict["ok"]:
-        c.execute("UPDATE wishes SET status='fulfilled', evidence=? WHERE id=?", ('{}', wid))
-        c.commit(); c.close()
+        # 拒绝即零写入：status 保持 claimed、evidence 不动，绝不留 fulfilled 空壳
+        c.close()
         code = 409 if verdict["reason"] == "already_fulfilled" else 400
         raise HTTPException(code, detail={"error": verdict["reason"],
                                           "errors": verdict["errors"], "missing": verdict["missing"]})
@@ -139,10 +137,11 @@ def mine(claimer: str):
 
 @app.get("/api/done")
 def done():
-    # 未核销（非 fulfilled）绝不出现在已完成页
+    # 唯一入门条件：status='fulfilled' 且冻有完整快照；claimed/缺字段拒绝绝不进列表
     c = connect()
-    rows = [fulfillment.done_card(dict(r))
-            for r in c.execute("SELECT * FROM wishes WHERE status='fulfilled' OR evidence IS NOT NULL ORDER BY id DESC")]
+    cards = (card for r in c.execute("SELECT * FROM wishes WHERE status='fulfilled' ORDER BY id DESC")
+             if (card := fulfillment.done_card(dict(r))) is not None)
+    rows = list(cards)
     c.close(); return rows
 
 @app.get("/api/settings")
